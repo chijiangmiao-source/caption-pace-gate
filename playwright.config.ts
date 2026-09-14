@@ -17,9 +17,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    // 验收在容器内构建生产产物并起静态预览，一次性运行
-    command: 'npm run build && npm run preview',
-    url: 'http://127.0.0.1:4173',
+    // 与容器运行时一致：构建生产产物后用零依赖静态服务器提供
+    command: 'npm run build && node server.mjs',
+    url: 'http://127.0.0.1:4173/healthz',
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },

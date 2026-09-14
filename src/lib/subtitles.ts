@@ -112,13 +112,17 @@ export function evaluateBatch(input: string): ParseResult {
   // 按物理行切分；统一去除行尾的 CR，兼容 CRLF 粘贴
   const lines = input.split('\n').map((l) => l.replace(/\r$/, ''));
   const errors: FormatError[] = [];
+  const blankLineNos: number[] = [];
   const parsed: Array<Omit<RawSubtitle, 'durationSec' | 'readingChars' | 'speed'>> = [];
 
   lines.forEach((rawLine, idx) => {
     const lineNo = idx + 1;
 
-    // 完全空白的物理行直接忽略（粘贴时常见的末尾空行）
-    if (rawLine.trim() === '') return;
+    // 记录空白物理行（严格格式下，只要批次存在数据行即为非法）
+    if (rawLine.trim() === '') {
+      blankLineNos.push(lineNo);
+      return;
+    }
 
     // 严格按制表符切分，且必须恰好 3 个字段
     const fields = rawLine.split('\t');
@@ -158,7 +162,17 @@ export function evaluateBatch(input: string): ParseResult {
     parsed.push({ lineNo, rawLine, startMs, endMs, text });
   });
 
+  // 严格格式：每行都必须是三个制表符分隔字段。
+  // 批次中存在数据行时，夹在任何位置（含首尾、两条之间）的空白行均使整批非法；
+  // 整个输入全为空白时视为“尚未提交批次”，交由界面给中性提示。
+  if (parsed.length > 0 && blankLineNos.length > 0) {
+    for (const lineNo of blankLineNos) {
+      errors.push({ lineNo, message: '空白行：每行必须为“开始时间⇥结束时间⇥文本”三个字段' });
+    }
+  }
+
   if (errors.length > 0) {
+    errors.sort((a, b) => a.lineNo - b.lineNo);
     return { ok: false, errors };
   }
   if (parsed.length === 0) {

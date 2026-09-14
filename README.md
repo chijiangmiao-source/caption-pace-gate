@@ -8,6 +8,8 @@
 
 - **输入格式**：输入区一次粘贴多行，每行严格为 3 个制表符（Tab）分隔字段：
   `开始时间⇥结束时间⇥文本`；时间固定 `HH:MM:SS.mmm`，范围 `00:00:00.000` ~ `23:59:59.999`。
+  批次中不允许空白行——夹在两条字幕之间或首尾的任何空白物理行都会使整批拒绝
+  （仅当整段输入全为空白时视为尚未提交批次）。
 - **排序**：整批按开始时间升序裁决；开始时间相同保持输入顺序（稳定排序）。
 - **字段校验**：结束时间必须晚于开始时间（相等即非法）；文本去除首尾空白后不得为空。
 - **阅读字数**：按文本的 Unicode **码点数**计数；空白字符（`\s`，含全角空格、Tab、换行）
@@ -28,7 +30,8 @@
 ## 技术栈
 
 TypeScript + Vue 3（`<script setup>`）+ Vite 6。裁决逻辑全部集中在
-`src/lib/subtitles.ts` 的纯函数中，组件只负责交互与渲染。
+`src/lib/subtitles.ts` 的纯函数中，组件只负责交互与渲染。生产运行时是
+`server.mjs`（仅用 Node 内置模块的零依赖静态服务器，含 `/healthz` 探针与 SPA 回退）。
 
 ## 本地开发
 
@@ -44,14 +47,17 @@ npm run preview    # 预览生产产物 http://localhost:4173
 
 ## Docker Compose
 
+`web` 为多阶段构建：构建阶段编译产物，运行镜像只含 `dist/` 与零依赖的
+`server.mjs`（不再带 `node_modules` / vite），启动即监听并暴露 `/healthz`。
 宿主端口由环境变量 `WEB_PORT` 覆盖（默认 `8080`）：
 
 ```bash
 WEB_PORT=9000 docker compose up -d web      # http://localhost:9000
 ```
 
-一次性验收服务 `verify`：在官方 Playwright 镜像内安装依赖、等待 web 就绪后
-运行整套端到端用例，结束即退出（退出码即验收结果）：
+一次性验收服务 `verify`：通过 `depends_on: service_healthy` **确定性等待** web
+健康检查通过（页面真正可服务）后，才在官方 Playwright 镜像内安装依赖并运行整套
+端到端用例，结束即退出（退出码即验收结果），不存在启动竞态：
 
 ```bash
 docker compose run --rm verify
@@ -62,7 +68,8 @@ docker compose run --rm verify
 - 时间边界 `00:00:00.000` / `23:59:59.999`，越界 `24:00:00.000`、`00:60:00.000`；
 - 速度恰好 `15.000` 合格、`15.00375` 超速但显示 `15.00`、16 字/秒超速；
 - 重叠 1 毫秒边界：`end == next.start` 不重叠，晚 1ms 即重叠；
-- 开始时间相同的稳定排序、CRLF 粘贴、空行忽略、空白文本、字段数错误整批拒绝；
+- 开始时间相同的稳定排序、CRLF 粘贴、批次内空白行（含两条字幕之间）整批拒绝、
+  空白文本、字段数错误整批拒绝；
 - 格式错误清空旧判定后，重新输入合法批次恢复放行；
 - JSON 下载内容（原始行、速度、总判定）。
 
@@ -73,9 +80,10 @@ src/
   lib/subtitles.ts   解析/校验/排序/速度/重叠/导出（纯函数）
   App.vue            输入区、判定横幅、时间轴、问题清单、明细表、下载
   styles.css
+server.mjs           零依赖 Node 生产静态服务器（/healthz + SPA 回退）
 tests/
   unit/              Vitest：核心规则临界值 + 组件行为
-  e2e/               Playwright：端到端临界值
-Dockerfile           多阶段构建，vite preview 提供静态服务
-docker-compose.yml   web（WEB_PORT 覆盖端口）+ verify（一次性验收）
+  e2e/               Playwright：端到端临界值（打生产服务器）
+Dockerfile           多阶段构建，运行镜像仅 dist + server.mjs
+docker-compose.yml   web（WEB_PORT 覆盖端口，带健康检查）+ verify（service_healthy 后一次性验收）
 ```

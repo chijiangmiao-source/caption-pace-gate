@@ -165,6 +165,21 @@ test.describe('整批拒绝与清空旧判定', () => {
     await expect(page.getByTestId('errors-panel')).toBeVisible();
     await expect(page.getByTestId('error-line-1')).toContainText('文本');
   });
+
+  test('两条字幕之间夹空白行：严格格式整批拒绝', async ({ page }) => {
+    await evaluate(
+      page,
+      [
+        line('00:00:00.000', '00:00:02.000', '第一条字幕'),
+        '',
+        line('00:00:02.000', '00:00:04.000', '第二条字幕'),
+      ].join('\n'),
+    );
+    await expect(page.getByTestId('errors-panel')).toBeVisible();
+    await expect(page.getByTestId('error-line-2')).toContainText('空白行');
+    await expect(page.getByTestId('verdict-pass')).toHaveCount(0);
+    await expect(page.getByTestId('timeline')).toHaveCount(0);
+  });
 });
 
 test.describe('JSON 下载', () => {

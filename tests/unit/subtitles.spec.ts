@@ -101,12 +101,40 @@ describe('evaluateBatch 格式校验', () => {
     if (!r.ok) expect(r.errors.map((e) => e.lineNo)).toEqual([2, 3]);
   });
 
-  it('忽略完全空白的物理行（含末尾空行）', () => {
-    const r = evaluateBatch('\n' + line('00:00:00.000', '00:00:01.000', '文本') + '\n\n');
-    expect(r.ok).toBe(true);
+  it('严格格式：两条字幕之间夹空白行整批拒绝', () => {
+    const input = [
+      line('00:00:00.000', '00:00:01.000', '第一条'),
+      '   ',
+      line('00:00:01.000', '00:00:02.000', '第二条'),
+    ].join('\n');
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.errors).toHaveLength(1);
+      expect(r.errors[0].lineNo).toBe(2);
+      expect(r.errors[0].message).toContain('空白行');
+    }
   });
 
-  it('空输入得到空批次', () => {
+  it('严格格式：首尾空白行同样整批拒绝', () => {
+    const withLeading = ['', line('00:00:00.000', '00:00:01.000', '文本')].join('\n');
+    expect(evaluateBatch(withLeading).ok).toBe(false);
+    const withTrailing = [line('00:00:00.000', '00:00:01.000', '文本'), '\t  '].join('\n');
+    expect(evaluateBatch(withTrailing).ok).toBe(false);
+  });
+
+  it('空白行错误与其他格式错误都被收集且按行号排序', () => {
+    const input = [
+      line('00:00:00.000', '00:00:01.000', '正常'),
+      '',
+      'bad',
+    ].join('\n');
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.map((e) => e.lineNo)).toEqual([2, 3]);
+  });
+
+  it('整段输入全为空白时为空批次（不算错误）', () => {
     const r = evaluateBatch('   \n\t\n');
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.verdict.sorted).toHaveLength(0);

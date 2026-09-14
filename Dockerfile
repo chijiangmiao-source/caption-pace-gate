@@ -6,13 +6,14 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# 运行阶段：vite preview 提供生产产物静态服务
+# 运行阶段：零依赖 Node 静态服务器（无需 node_modules / vite 工具链）
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/vite.config.ts ./vite.config.ts
+COPY --from=build /app/server.mjs ./server.mjs
 EXPOSE 4173
-CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "4173"]
+# 容器级健康探针，供编排据此判断页面真正可服务
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=12 \
+  CMD node -e "require('http').get('http://127.0.0.1:4173/healthz',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+CMD ["node", "server.mjs"]
