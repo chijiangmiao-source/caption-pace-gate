@@ -1,0 +1,35 @@
+services:
+  web:
+    build: .
+    image: subtitle-rhythm-gate-web:latest
+    ports:
+      # WEB_PORT 覆盖宿主端口，容器内固定 4173
+      - "${WEB_PORT:-8080}:4173"
+    restart: unless-stopped
+
+  # 一次性验收服务：对运行中的 web 跑完端到端用例后退出
+  verify:
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    working_dir: /app
+    depends_on:
+      - web
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web:4173
+    volumes:
+      - ./:/app
+      # 命名卷隔离容器内依赖，避免被宿主 node_modules 遮蔽
+      - verify_node_modules:/app/node_modules
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -e
+        npm ci
+        echo "等待 web 服务就绪..."
+        node -e "const http=require('http');let n=0;const wait=()=>{const req=http.get('http://web:4173/',(r)=>{r.resume();process.exit(0)});req.on('error',()=>{if(++n>120){console.error('web 服务未就绪');process.exit(1)}setTimeout(wait,1000)});req.setTimeout(2000,()=>req.destroy())};wait()"
+        npx playwright test -c playwright.docker.config.ts
+
+volumes:
+  verify_node_modules:
