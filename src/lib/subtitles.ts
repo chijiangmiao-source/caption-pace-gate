@@ -236,6 +236,55 @@ function buildReasons(speedingCount: number, overlapCount: number): string[] {
   return reasons;
 }
 
+/* ------------------------------------------------------------------ */
+/* 出屏预览：基于 Verdict.sorted 的纯函数查询（不改变播出许可）          */
+/* ------------------------------------------------------------------ */
+
+/** 预览时间边界（毫秒） */
+export interface PreviewBounds {
+  /** 首条字幕开始时刻：播放头起点 */
+  startMs: number;
+  /** 全部字幕最晚结束时刻：播放头终点 */
+  endMs: number;
+}
+
+/**
+ * 预览时间边界。Verdict.sorted 已按开始时间升序，
+ * 起点即首条开始时间；终点取全部字幕 endMs 的最大值。
+ * 空批次返回 null（界面据此不显示预览控制）。
+ */
+export function previewBounds(verdict: Verdict): PreviewBounds | null {
+  const sorted = verdict.sorted;
+  if (sorted.length === 0) return null;
+  let endMs = sorted[0].endMs;
+  for (const s of sorted) {
+    if (s.endMs > endMs) endMs = s.endMs;
+  }
+  return { startMs: sorted[0].startMs, endMs };
+}
+
+/**
+ * 查询某一时刻命中的字幕。占屏区间为 [startMs, endMs) 半开区间，
+ * 与重叠裁决一致（结束时刻等于下一条开始时刻不算重叠）。
+ * 重叠时段同时返回全部命中条目；空档时段返回空数组。
+ */
+export function subtitlesAt(verdict: Verdict, tMs: number): RawSubtitle[] {
+  return verdict.sorted.filter((s) => s.startMs <= tMs && tMs < s.endMs);
+}
+
+/**
+ * 播放头按真实经过毫秒推进；到达边界末尾即停在 endMs 并标记完成，
+ * 不会越过结束位置。
+ */
+export function advancePreview(
+  bounds: PreviewBounds,
+  currentMs: number,
+  elapsedMs: number,
+): { tMs: number; done: boolean } {
+  const tMs = Math.min(currentMs + elapsedMs, bounds.endMs);
+  return { tMs, done: tMs >= bounds.endMs };
+}
+
 export interface ExportRow {
   lineNo: number;
   rawLine: string;

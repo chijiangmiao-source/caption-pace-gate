@@ -182,6 +182,142 @@ test.describe('整批拒绝与清空旧判定', () => {
   });
 });
 
+test.describe('出屏预览', () => {
+  // 甲 0~2s，空档 2~3s，乙 3~5s
+  const BATCH = [
+    line('00:00:00.000', '00:00:02.000', '第一条字幕'),
+    line('00:00:03.000', '00:00:05.000', '第二条字幕'),
+  ].join('\n');
+
+  /** 模拟拖动 range 滑块到指定毫秒值 */
+  async function scrubTo(page: import('@playwright/test').Page, ms: number) {
+    await page.getByTestId('preview-scrubber').evaluate((el, v) => {
+      (el as HTMLInputElement).value = String(v);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, ms);
+  }
+
+  test('裁决后播放：播放头按真实时间推进、字幕同步显示且许可不变', async ({ page }) => {
+    await evaluate(page, BATCH);
+    await expect(page.getByTestId('verdict-pass')).toBeVisible();
+    // 初始：未开始，时钟停在首条开始时间
+    await expect(page.getByTestId('preview-status')).toHaveText('未开始');
+    await expect(page.getByTestId('preview-clock')).toHaveText('00:00:00.000');
+    await expect(page.getByTestId('preview-caption')).toHaveText('第一条字幕');
+
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('播放中');
+    await expect(page.getByTestId('preview-toggle')).toHaveText('暂停');
+    // 播放头真实推进：时钟离开起点
+    const clock = page.getByTestId('preview-clock');
+    await expect.poll(async () => clock.textContent()).not.toBe('00:00:00.000');
+    // 播放头、时间标签共享同一时刻：播放头已离开时间轴最左端
+    const playheadLeft = await page.getByTestId('playhead').evaluate(
+      (el) => (el as HTMLElement).style.left,
+    );
+    expect(parseFloat(playheadLeft)).toBeGreaterThan(0);
+    // 预览不改变播出许可
+    await expect(page.getByTestId('verdict-pass')).toBeVisible();
+    await expect(page.getByTestId('verdict-fail')).toHaveCount(0);
+  });
+
+  test('暂停后时间冻结，继续预览后恢复推进', async ({ page }) => {
+    await evaluate(page, BATCH);
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('播放中');
+    await page.waitForTimeout(300);
+
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('已暂停');
+    const clock = page.getByTestId('preview-clock');
+    const frozen = await clock.textContent();
+    await page.waitForTimeout(600);
+    expect(await clock.textContent()).toBe(frozen);
+
+    // 继续预览：时钟从冻结值继续推进
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('播放中');
+    await expect.poll(async () => clock.textContent()).not.toBe(frozen);
+  });
+
+  test('拖动定位：时刻与字幕同步，间隙无字幕，拖到末尾标记预览完成', async ({ page }) => {
+    await evaluate(page, BATCH);
+    // 先播放再暂停，避免拖动后时钟继续走动影响断言
+    await page.getByTestId('preview-toggle').click();
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('已暂停');
+
+    // 拖到 3.5s：命中第二条字幕
+    await scrubTo(page, 3500);
+    await expect(page.getByTestId('preview-clock')).toHaveText('00:00:03.500');
+    await expect(page.getByTestId('preview-caption')).toHaveText('第二条字幕');
+
+    // 拖到 2.5s 空档：无字幕
+    await scrubTo(page, 2500);
+    await expect(page.getByTestId('preview-clock')).toHaveText('00:00:02.500');
+    await expect(page.getByTestId('preview-caption')).toHaveCount(0);
+    await expect(page.getByTestId('preview-gap')).toBeVisible();
+
+    // 拖到末尾：停在结束位置并标记预览完成
+    await scrubTo(page, 5000);
+    await expect(page.getByTestId('preview-status')).toHaveText('预览完成');
+    await expect(page.getByTestId('preview-clock')).toHaveText('00:00:05.000');
+    // 末尾时刻无字幕命中（半开区间）
+    await expect(page.getByTestId('preview-caption')).toHaveCount(0);
+
+    // 完成后可重新预览：回到起点播放
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('播放中');
+    await expect(page.getByTestId('preview-caption')).toHaveText('第一条字幕');
+  });
+
+  test('重叠时段拖动定位同时显示两条字幕', async ({ page }) => {
+    await evaluate(
+      page,
+      [
+        line('00:00:00.000', '00:00:02.000', '甲条字幕'),
+        line('00:00:01.000', '00:00:03.000', '乙条字幕'),
+      ].join('\n'),
+    );
+    await expect(page.getByTestId('verdict-fail')).toBeVisible();
+    await scrubTo(page, 1500);
+    const captions = page.getByTestId('preview-caption');
+    await expect(captions).toHaveCount(2);
+    await expect(captions.nth(0)).toHaveText('甲条字幕');
+    await expect(captions.nth(1)).toHaveText('乙条字幕');
+    // 预览不改变拒绝结论
+    await expect(page.getByTestId('verdict-fail')).toBeVisible();
+  });
+
+  test('非法输入清除预览；清空与空批次不显示控制', async ({ page }) => {
+    await evaluate(page, BATCH);
+    await page.getByTestId('preview-toggle').click();
+    await expect(page.getByTestId('preview-status')).toHaveText('播放中');
+
+    // 非法输入：整批拒绝，旧预览立即停止并移除
+    await evaluate(page, '这一行缺少字段');
+    await expect(page.getByTestId('errors-panel')).toBeVisible();
+    await expect(page.getByTestId('preview-toggle')).toHaveCount(0);
+    await expect(page.getByTestId('preview-status')).toHaveCount(0);
+    await expect(page.getByTestId('playhead')).toHaveCount(0);
+
+    // 恢复合法批次：控制回归且状态复位为未开始
+    await evaluate(page, BATCH);
+    await expect(page.getByTestId('preview-toggle')).toBeVisible();
+    await expect(page.getByTestId('preview-status')).toHaveText('未开始');
+    await expect(page.getByTestId('preview-clock')).toHaveText('00:00:00.000');
+
+    // 清空：预览控制移除
+    await page.getByTestId('clear-btn').click();
+    await expect(page.getByTestId('preview-toggle')).toHaveCount(0);
+
+    // 空批次：不显示预览控制
+    await evaluate(page, '   \n\t\n');
+    await expect(page.getByTestId('empty-hint')).toBeVisible();
+    await expect(page.getByTestId('preview-toggle')).toHaveCount(0);
+  });
+});
+
 test.describe('JSON 下载', () => {
   test('下载文件含原始行、两位小数速度与 REJECT 总判定', async ({ page }) => {
     const raw = line('00:00:00.000', '00:00:01.000', '字'.repeat(16));

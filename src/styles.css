@@ -400,3 +400,92 @@ table.detail tr.overlapped td {
 .section-title.overlap {
   color: var(--red);
 }
+
+/* 出屏预览 */
+.preview-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.preview-scrubber {
+  flex: 1;
+  min-width: 220px;
+  accent-color: var(--amber);
+}
+
+.preview-clock {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 14px;
+  color: var(--amber);
+  min-width: 100px;
+}
+
+.preview-status {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 12px;
+  white-space: nowrap;
+}
+
+.preview-status[data-status='playing'] {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.preview-status[data-status='paused'] {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.preview-status[data-status='done'] {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.tl-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.7);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.preview-stage {
+  margin-top: 14px;
+  min-height: 54px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #0c111c;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.preview-caption {
+  font-size: 18px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+  padding: 3px 16px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-gap {
+  color: var(--muted);
+  font-size: 13px;
+}

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  advancePreview,
   buildExportPayload,
   countReadingChars,
   evaluateBatch,
   formatSpeed,
   formatTime,
   parseTime,
+  previewBounds,
+  subtitlesAt,
 } from '../../src/lib/subtitles';
 
 const T = '\t';
@@ -280,6 +283,92 @@ describe('拒绝原因集合', () => {
       expect(r.verdict.reasons.join(' ')).toContain('超速');
       expect(r.verdict.reasons.join(' ')).toContain('重叠');
     }
+  });
+});
+
+describe('出屏预览：previewBounds 时间边界', () => {
+  it('起点为首条开始时间，终点为全部字幕最晚结束时间（乱序输入亦正确）', () => {
+    const input = [
+      line('00:00:05.000', '00:00:07.000', '丙'),
+      line('00:00:01.000', '00:00:02.000', '甲'),
+      line('00:00:03.000', '00:00:09.500', '乙'), // 结束最晚
+    ].join('\n');
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(previewBounds(r.verdict)).toEqual({ startMs: 1000, endMs: 9500 });
+    }
+  });
+
+  it('空批次返回 null（不显示预览控制）', () => {
+    const r = evaluateBatch('   \n\t\n');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(previewBounds(r.verdict)).toBeNull();
+  });
+});
+
+describe('出屏预览：subtitlesAt 当前时刻字幕', () => {
+  // 甲 0~2s，乙 1~3s（与甲重叠 1~2s），丙 5~6s；3~5s 为空档
+  const input = [
+    line('00:00:00.000', '00:00:02.000', '甲'),
+    line('00:00:01.000', '00:00:03.000', '乙'),
+    line('00:00:05.000', '00:00:06.000', '丙'),
+  ].join('\n');
+
+  it('起止边界：开始时刻命中，结束时刻（半开区间）不再命中', () => {
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(subtitlesAt(r.verdict, 0).map((s) => s.text)).toEqual(['甲']);
+      // t = 2000：甲已下屏，乙仍在屏（与重叠裁决的边界语义一致）
+      expect(subtitlesAt(r.verdict, 2000).map((s) => s.text)).toEqual(['乙']);
+      expect(subtitlesAt(r.verdict, 3000).map((s) => s.text)).toEqual([]);
+    }
+  });
+
+  it('间隙无字幕：空档时刻返回空数组', () => {
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(subtitlesAt(r.verdict, 4000)).toEqual([]);
+      expect(subtitlesAt(r.verdict, 4999)).toEqual([]);
+    }
+  });
+
+  it('重叠时同时返回两条，且保持排序顺序', () => {
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const hits = subtitlesAt(r.verdict, 1500);
+      expect(hits.map((s) => s.text)).toEqual(['甲', '乙']);
+    }
+  });
+
+  it('预览末尾时刻（endMs）无字幕命中', () => {
+    const r = evaluateBatch(input);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const b = previewBounds(r.verdict)!;
+      expect(b.endMs).toBe(6000);
+      expect(subtitlesAt(r.verdict, b.endMs)).toEqual([]);
+    }
+  });
+});
+
+describe('出屏预览：advancePreview 播放头推进与末尾停止', () => {
+  const bounds = { startMs: 1000, endMs: 5000 };
+
+  it('按真实经过毫秒推进', () => {
+    expect(advancePreview(bounds, 1000, 500)).toEqual({ tMs: 1500, done: false });
+    expect(advancePreview(bounds, 1000, 3999.6)).toEqual({ tMs: 4999.6, done: false });
+  });
+
+  it('到达末尾停在结束位置并标记完成，不越过终点', () => {
+    expect(advancePreview(bounds, 4500, 500)).toEqual({ tMs: 5000, done: true });
+    // 推进量超出剩余时长：仍停在 endMs
+    expect(advancePreview(bounds, 4500, 10_000)).toEqual({ tMs: 5000, done: true });
+    // 已在末尾继续推进：保持结束位置
+    expect(advancePreview(bounds, 5000, 100)).toEqual({ tMs: 5000, done: true });
   });
 });
 

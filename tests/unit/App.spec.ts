@@ -136,4 +136,52 @@ describe('App.vue 组件行为', () => {
     expect(wrapper.find('[data-testid="verdict-fail"]').exists()).toBe(false);
     expect((wrapper.get('[data-testid="input-area"]').element as HTMLTextAreaElement).value).toBe('');
   });
+
+  it('合法非空批次显示预览控制，初始未开始且时钟位于首条开始时间', async () => {
+    const wrapper = setup(
+      [
+        line('00:00:01.000', '00:00:02.000', '第一条字幕'),
+        line('00:00:03.000', '00:00:05.000', '第二条字幕'),
+      ].join('\n'),
+    );
+    await wrapper.get('[data-testid="evaluate-btn"]').trigger('click');
+    expect(wrapper.find('[data-testid="preview-toggle"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="preview-toggle"]').text()).toBe('开始预览');
+    expect(wrapper.find('[data-testid="preview-status"]').text()).toBe('未开始');
+    expect(wrapper.find('[data-testid="preview-clock"]').text()).toBe('00:00:01.000');
+    expect(wrapper.find('[data-testid="preview-scrubber"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="playhead"]').exists()).toBe(true);
+    // 首条开始时刻命中第一条字幕
+    expect(wrapper.find('[data-testid="preview-caption"]').text()).toBe('第一条字幕');
+  });
+
+  it('空批次不显示预览控制', async () => {
+    const wrapper = setup('   \n\n');
+    await wrapper.get('[data-testid="evaluate-btn"]').trigger('click');
+    expect(wrapper.find('[data-testid="empty-hint"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="preview-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="preview-status"]').exists()).toBe(false);
+  });
+
+  it('重新裁决遇格式错误时移除旧预览控制', async () => {
+    const wrapper = setup(line('00:00:00.000', '00:00:02.000', '合法字幕内容'));
+    await wrapper.get('[data-testid="evaluate-btn"]').trigger('click');
+    expect(wrapper.find('[data-testid="preview-toggle"]').exists()).toBe(true);
+
+    const ta = wrapper.get('[data-testid="input-area"]').element as HTMLTextAreaElement;
+    ta.value = '不是合法行';
+    ta.dispatchEvent(new Event('input'));
+    await wrapper.get('[data-testid="evaluate-btn"]').trigger('click');
+    expect(wrapper.find('[data-testid="errors-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="preview-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="preview-status"]').exists()).toBe(false);
+  });
+
+  it('清空后预览控制一并移除', async () => {
+    const wrapper = setup(line('00:00:00.000', '00:00:02.000', '合法字幕内容'));
+    await wrapper.get('[data-testid="evaluate-btn"]').trigger('click');
+    expect(wrapper.find('[data-testid="preview-toggle"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="clear-btn"]').trigger('click');
+    expect(wrapper.find('[data-testid="preview-toggle"]').exists()).toBe(false);
+  });
 });

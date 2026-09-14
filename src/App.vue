@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import {
+  advancePreview,
   buildExportPayload,
   evaluateBatch,
   formatSpeed,
   formatTime,
+  previewBounds,
+  subtitlesAt,
   type ParseResult,
+  type PreviewBounds,
+  type RawSubtitle,
   type Verdict,
 } from './lib/subtitles';
 
@@ -19,11 +24,16 @@ const SAMPLE = [
 ].join('\n');
 
 function runEvaluation() {
-  // 整批裁决；格式错误时 evaluateBatch 返回错误，旧判定即被替换（清空）
+  // 重新裁决：立即停止并移除旧预览（格式错误时旧判定同样被替换清空）
+  resetPreview();
   result.value = evaluateBatch(rawInput.value);
+  // 新批次合法且非空：播放头复位到首条开始时间，等待开始预览
+  const b = bounds.value;
+  if (b) previewMs.value = b.startMs;
 }
 
 function clearAll() {
+  resetPreview();
   rawInput.value = '';
   result.value = null;
 }
@@ -76,6 +86,125 @@ const ticks = computed(() => {
     return { ms, pos, transform, label: formatTime(ms) };
   });
 });
+
+/* ---- 出屏预览 ---- */
+/** 预览状态：未开始 / 播放中 / 已暂停 / 已完成 */
+type PreviewStatus = 'idle' | 'playing' | 'paused' | 'done';
+const previewStatus = ref<PreviewStatus>('idle');
+/** 播放头当前时刻（毫秒）：播放头、时间标签、字幕卡片共享同一值 */
+const previewMs = ref(0);
+
+/** 预览时间边界；null 表示空批次（不显示预览控制） */
+const bounds = computed<PreviewBounds | null>(() =>
+  verdict.value ? previewBounds(verdict.value) : null,
+);
+
+/** 当前时刻命中的字幕（重叠时段多条，空档为空） */
+const activeSubs = computed<RawSubtitle[]>(() => {
+  const v = verdict.value;
+  if (!v || v.sorted.length === 0) return [];
+  return subtitlesAt(v, previewMs.value);
+});
+
+const previewStatusLabel = computed(() => {
+  switch (previewStatus.value) {
+    case 'playing':
+      return '播放中';
+    case 'paused':
+      return '已暂停';
+    case 'done':
+      return '预览完成';
+    default:
+      return '未开始';
+  }
+});
+
+const previewToggleLabel = computed(() => {
+  switch (previewStatus.value) {
+    case 'playing':
+      return '暂停';
+    case 'paused':
+      return '继续预览';
+    case 'done':
+      return '重新预览';
+    default:
+      return '开始预览';
+  }
+});
+
+let rafId: number | null = null;
+/** 播放锚点：开始/续播时刻的 performance.now 与对应播放头位置，避免逐帧累积误差 */
+let anchorPerf = 0;
+let anchorMs = 0;
+
+function stopClock() {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+}
+
+function tick(now: number) {
+  const b = bounds.value;
+  if (!b) {
+    rafId = null;
+    return;
+  }
+  const next = advancePreview(b, anchorMs, now - anchorPerf);
+  previewMs.value = Math.round(next.tMs);
+  if (next.done) {
+    // 拖到/播到末尾：停在结束位置并标记预览完成
+    previewStatus.value = 'done';
+    rafId = null;
+    return;
+  }
+  rafId = requestAnimationFrame(tick);
+}
+
+function startClock() {
+  stopClock();
+  anchorPerf = performance.now();
+  anchorMs = previewMs.value;
+  rafId = requestAnimationFrame(tick);
+}
+
+function togglePreview() {
+  const b = bounds.value;
+  if (!b) return;
+  if (previewStatus.value === 'playing') {
+    stopClock();
+    previewStatus.value = 'paused';
+    return;
+  }
+  // 未开始/已完成：从首条开始时间起播；已暂停：从当前位置继续
+  if (previewStatus.value !== 'paused') previewMs.value = b.startMs;
+  previewStatus.value = 'playing';
+  startClock();
+}
+
+function onScrub(event: Event) {
+  const b = bounds.value;
+  if (!b) return;
+  const ms = Number((event.target as HTMLInputElement).value);
+  previewMs.value = Math.min(Math.max(ms, b.startMs), b.endMs);
+  if (previewMs.value >= b.endMs) {
+    stopClock();
+    previewStatus.value = 'done';
+  } else if (previewStatus.value === 'playing') {
+    startClock(); // 以新位置为锚点继续播放
+  } else {
+    previewStatus.value = 'paused';
+  }
+}
+
+/** 立即停止并移除旧预览（重新裁决 / 清空 / 格式错误时调用） */
+function resetPreview() {
+  stopClock();
+  previewStatus.value = 'idle';
+  previewMs.value = 0;
+}
+
+onBeforeUnmount(stopClock);
 
 /* ---- 下载 JSON ---- */
 function downloadJson() {
@@ -151,7 +280,28 @@ function downloadJson() {
     <p v-else class="hint" data-testid="empty-hint">输入区为空，请粘贴至少一行合法字幕后再裁决。</p>
 
     <section v-if="verdict.sorted.length > 0" class="panel">
-      <h2>时间轴</h2>
+      <h2>时间轴 · 出屏预览</h2>
+      <!-- 预览控制：开始/暂停 + 时间轴拖动 + 当前时刻 + 状态（仅合法非空批次渲染） -->
+      <div class="preview-controls">
+        <button class="primary" data-testid="preview-toggle" @click="togglePreview">
+          {{ previewToggleLabel }}
+        </button>
+        <input
+          type="range"
+          class="preview-scrubber"
+          data-testid="preview-scrubber"
+          :min="bounds!.startMs"
+          :max="bounds!.endMs"
+          step="1"
+          :value="previewMs"
+          aria-label="拖动定位预览时刻"
+          @input="onScrub"
+        />
+        <span class="preview-clock" data-testid="preview-clock">{{ formatTime(previewMs) }}</span>
+        <span class="preview-status" :data-status="previewStatus" data-testid="preview-status">
+          {{ previewStatusLabel }}
+        </span>
+      </div>
       <div class="timeline-scroll">
         <div class="timeline" data-testid="timeline">
           <div class="tl-axis">
@@ -195,6 +345,12 @@ function downloadJson() {
               <span class="tl-bar-label">#{{ s.lineNo }} {{ s.text }}</span>
             </div>
           </div>
+          <!-- 播放头：与时间标签、字幕卡片共享 previewMs -->
+          <div
+            class="tl-playhead"
+            data-testid="playhead"
+            :style="{ left: pct(previewMs) + '%' }"
+          ></div>
         </div>
       </div>
       <div class="tl-legend">
@@ -207,6 +363,20 @@ function downloadJson() {
           ></span
           >重叠时段</span
         >
+      </div>
+      <!-- 出屏舞台：当前时刻命中的字幕文本（重叠时同时显示多条） -->
+      <div class="preview-stage" data-testid="preview-stage">
+        <span v-if="activeSubs.length === 0" class="preview-gap" data-testid="preview-gap">
+          （此时刻无字幕）
+        </span>
+        <div
+          v-for="s in activeSubs"
+          :key="'cap' + s.lineNo"
+          class="preview-caption"
+          data-testid="preview-caption"
+        >
+          {{ s.text }}
+        </div>
       </div>
     </section>
 
